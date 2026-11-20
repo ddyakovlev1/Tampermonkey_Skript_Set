@@ -6,6 +6,7 @@
 
 | Скрипт | Что делает | Установить |
 |---|---|---|
+| [Boosty_Favorites](Boosty_Favorites/) | Звёздочка у каждого поста и раздел «Избранное» в шапке Boosty | [установить](https://raw.githubusercontent.com/ddyakovlev1/tampermonkey_skript_set/main/Boosty_Favorites/boosty-favorites.user.js) |
 | [Fixed_Video_Folding](Fixed_Video_Folding/) | Горячие клавиши видео (мини-плеер, полный экран и др.) работают на русской раскладке | [установить](https://raw.githubusercontent.com/ddyakovlev1/tampermonkey_skript_set/main/Fixed_Video_Folding/fixed-video-folding.user.js) |
 | [YouTube_Speed_Unblocker](YouTube_Speed_Unblocker/) | Кнопки любой скорости поверх плеера YouTube, видео и Shorts | [установить](https://raw.githubusercontent.com/ddyakovlev1/tampermonkey_skript_set/main/YouTube_Speed_Unblocker/youtube-speed.user.js) |
 
