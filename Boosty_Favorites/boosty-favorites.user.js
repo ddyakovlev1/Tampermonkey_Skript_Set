@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Boosty: избранное (звёздочка)
 // @namespace    danil.boosty.favorites
-// @version      1.0.1
+// @version      1.0.2
 // @description  Звёздочка у каждого поста и раздел «Избранное» в шапке Boosty. Сохранённые посты хранятся в браузере.
 // @match        https://boosty.to/*
 // @icon         https://boosty.to/favicon.png?v=15
@@ -643,7 +643,7 @@
         padding: 0;
         border: 0;
         border-radius: 12px;
-        background: transparent;
+        background: var(--var-color-chip-bg, rgba(127,127,127,.14));
         color: var(--var-color-text-primary, #f1f1f1);
         cursor: pointer;
         flex: 0 0 auto;
@@ -652,8 +652,8 @@
       }
       // звезда в шапке — та же обводка, что у иконок уведомлений и сообщений
       .tm-bo-top .tm-bo-star-svg path { stroke-width: 1.8; }
-      .tm-bo-top:hover { background: var(--var-color-chip-bg, rgba(127,127,127,.14)); color: var(--color-brand, #f15f2c); }
-      .tm-bo-top.is-open { background: var(--var-color-chip-bg, rgba(127,127,127,.14)); color: var(--color-brand, #f15f2c); }
+      .tm-bo-top:hover { background: var(--var-color-chip-bg-hover, rgba(127,127,127,.2)); color: var(--color-brand, #f15f2c); }
+      .tm-bo-top.is-open { background: var(--var-color-chip-bg-hover, rgba(127,127,127,.2)); color: var(--color-brand, #f15f2c); }
 
       /* звезда в карточке поста */
       .tm-bo-star-btn {
