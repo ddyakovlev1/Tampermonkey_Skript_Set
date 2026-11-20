@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Boosty: избранное (звёздочка)
 // @namespace    danil.boosty.favorites
-// @version      1.0.0
+// @version      1.0.1
 // @description  Звёздочка у каждого поста и раздел «Избранное» в шапке Boosty. Сохранённые посты хранятся в браузере.
 // @match        https://boosty.to/*
 // @icon         https://boosty.to/favicon.png?v=15
@@ -333,7 +333,7 @@
     btn.type = 'button';
     btn.className = 'tm-bo-top';
     btn.dataset.tmBo = 'top';
-    btn.innerHTML = starSVG(22);
+    btn.innerHTML = starSVG(24);
     btn.title = 'Избранное';
     btn.setAttribute('aria-label', 'Открыть избранное');
     btn.addEventListener('click', (e) => {
@@ -364,7 +364,6 @@
   function updateBadge() {
     if (!topBtn) return;
     const n = itemCount();
-    topBtn.classList.toggle('has-items', n > 0);
     topBtn.title = n ? 'Избранное: ' + n : 'Избранное';
     topBtn.setAttribute('aria-label', n ? 'Открыть избранное, постов: ' + n : 'Открыть избранное');
   }
@@ -651,10 +650,10 @@
         transition: background .15s ease, color .15s ease;
         -webkit-tap-highlight-color: transparent;
       }
+      // звезда в шапке — та же обводка, что у иконок уведомлений и сообщений
+      .tm-bo-top .tm-bo-star-svg path { stroke-width: 1.8; }
       .tm-bo-top:hover { background: var(--var-color-chip-bg, rgba(127,127,127,.14)); color: var(--color-brand, #f15f2c); }
       .tm-bo-top.is-open { background: var(--var-color-chip-bg, rgba(127,127,127,.14)); color: var(--color-brand, #f15f2c); }
-      .tm-bo-top.has-items { color: var(--color-brand, #f15f2c); }
-      .tm-bo-top.has-items .tm-bo-star-svg path { fill: currentColor; }
 
       /* звезда в карточке поста */
       .tm-bo-star-btn {
