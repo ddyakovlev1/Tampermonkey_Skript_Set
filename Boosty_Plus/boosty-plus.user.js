@@ -1,22 +1,24 @@
 // ==UserScript==
-// @name         Boosty: избранное (звёздочка)
-// @namespace    danil.boosty.favorites
-// @version      1.0.2
-// @description  Звёздочка у каждого поста и раздел «Избранное» в шапке Boosty. Сохранённые посты хранятся в браузере.
+// @name         Boosty Plus
+// @namespace    danil.boosty.plus
+// @version      2.0.0
+// @description  Звёздочка у постов, «Избранное» и «История» последних 30 просмотров на Boosty. Всё хранится в браузере.
 // @match        https://boosty.to/*
 // @icon         https://boosty.to/favicon.png?v=15
 // @grant        none
 // @sandbox      DOM
 // @run-at       document-idle
 // @noframes
-// @updateURL    https://raw.githubusercontent.com/ddyakovlev1/tampermonkey_skript_set/main/Boosty_Favorites/boosty-favorites.user.js
-// @downloadURL  https://raw.githubusercontent.com/ddyakovlev1/tampermonkey_skript_set/main/Boosty_Favorites/boosty-favorites.user.js
+// @updateURL    https://raw.githubusercontent.com/ddyakovlev1/tampermonkey_skript_set/main/Boosty_Plus/boosty-plus.user.js
+// @downloadURL  https://raw.githubusercontent.com/ddyakovlev1/tampermonkey_skript_set/main/Boosty_Plus/boosty-plus.user.js
 // ==/UserScript==
 
 (function () {
   'use strict';
 
-  const STORE_KEY = 'tm-boosty-favorites';
+  const STORE_KEY = 'tm-boosty-plus';
+  const LEGACY_STORE_KEY = 'tm-boosty-favorites';
+  const HISTORY_LIMIT = 30;
   const EXCERPT_LIMIT = 160;
   const POST_ID_RE = /\/posts\/([0-9a-zA-Z-]{8,})/;
 
@@ -28,45 +30,292 @@
       '" aria-hidden="true" focusable="false"><path d="' + STAR_PATH + '"/></svg>';
   }
 
+  // часы со стрелкой против часовой — как иконка истории в интерфейсах
+  const CLOCK_PARTS =
+    '<polyline points="1 4 1 10 7 10"/>' +
+    '<path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>' +
+    '<path d="M12 7v5l3 2"/>';
+  function clockSVG(size) {
+    return '<svg class="tm-bo-clock-svg" viewBox="0 0 24 24" width="' + size + '" height="' + size +
+      '" aria-hidden="true" focusable="false">' + CLOCK_PARTS + '</svg>';
+  }
+
   // ── Состояние и хранилище ─────────────────────────────────────────────────
   const state = {
-    items: load(),
+    items: {},
+    history: [],
     filter: '',
+    tab: 'favorites',
     open: false,
     lastFocus: null
   };
   let panel = null;
   let overlay = null;
   let topBtn = null;
+  let historyBtn = null;
+  let tabsEl = null;
+  let favCountEl = null;
+  let histCountEl = null;
+  let toolsEl = null;
+  let footEl = null;
   let listEl = null;
-  let countEl = null;
   let searchWrap = null;
   let searchInput = null;
   let toastEl = null;
   let toastTimer = 0;
   let scanTimer = 0;
 
-  function load() {
+  function parseJson(raw) {
+    if (!raw) return null;
     try {
-      const raw = localStorage.getItem(STORE_KEY);
-      if (!raw) return {};
       const data = JSON.parse(raw);
-      if (!data || typeof data !== 'object') return {};
-      if (data.items && typeof data.items === 'object') return data.items;
-      // на случай старого формата — просто словарь постов
-      return data;
+      return data && typeof data === 'object' ? data : null;
     } catch (err) {
-      console.warn('[Boosty fav] не удалось прочитать избранное', err);
-      return {};
+      return null;
     }
   }
 
-  function save() {
-    try {
-      localStorage.setItem(STORE_KEY, JSON.stringify({ v: 1, items: state.items }));
-    } catch (err) {
-      console.warn('[Boosty fav] не удалось сохранить избранное', err);
+  const isObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
+
+  function sanitizeHistory(list) {
+    const sorted = (Array.isArray(list) ? list : [])
+      .filter((item) =>
+        isObject(item) &&
+        typeof item.id === 'string' && item.id &&
+        typeof item.url === 'string' && item.url
+      )
+      .sort((a, b) => (b.viewedAt || 0) - (a.viewedAt || 0));
+
+    const seen = new Set();
+    const out = [];
+    for (const item of sorted) {
+      if (seen.has(item.id)) continue;
+      seen.add(item.id);
+      out.push(item);
     }
+    return out.slice(0, HISTORY_LIMIT);
+  }
+
+  function normalizeStore(newRaw, oldRaw) {
+    const nw = parseJson(newRaw);
+    const old = parseJson(oldRaw);
+    let items = {};
+    let history = [];
+
+    if (isObject(nw)) {
+      if (isObject(nw.items)) items = nw.items;
+      else if (isObject(nw.favorites)) items = nw.favorites;
+      history = sanitizeHistory(nw.history);
+    } else if (isObject(old)) {
+      items = isObject(old.items) ? old.items : old;
+    }
+
+    return { items, history };
+  }
+
+  function readStore(storage) {
+    return normalizeStore(storage.getItem(STORE_KEY), storage.getItem(LEGACY_STORE_KEY));
+  }
+
+  function saveStore(storage, items, history) {
+    try {
+      storage.setItem(STORE_KEY, JSON.stringify({ v: 1, items, history }));
+    } catch (err) {
+      console.warn('[Boosty Plus] не удалось сохранить данные', err);
+    }
+  }
+
+  function load() {
+    return readStore(localStorage);
+  }
+
+  function save() {
+    saveStore(localStorage, state.items, state.history);
+  }
+
+  // ── Модель истории ────────────────────────────────────────────────────────
+  const POST_PAGE_RE = /^\/([^/]+)\/posts\/([0-9a-zA-Z-]{8,})\/?$/;
+  const MONTHS_SHORT = ['янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
+
+  function parsePostPath(pathname) {
+    const m = (pathname || '').match(POST_PAGE_RE);
+    return m ? { slug: m[1], id: m[2] } : null;
+  }
+
+  function cleanTitle(raw, author) {
+    let title = clean(raw);
+    if (!title) return '';
+    const suffixes = [];
+    if (author) suffixes.push(' - ' + clean(author));
+    suffixes.push(' - Boosty', ' | Boosty');
+    for (const suffix of suffixes) {
+      if (suffix && title.endsWith(suffix)) {
+        title = title.slice(0, -suffix.length).trim();
+        break;
+      }
+    }
+    title = title.replace(/^[-|]\s*/, '').trim();
+    if (!title || title === 'Boosty' || (author && title === clean(author))) return '';
+    return title;
+  }
+
+  function relativeViewedAt(ts, now) {
+    if (!ts) return '';
+    const date = new Date(ts);
+    if (isNaN(date.getTime())) return '';
+    const current = new Date(now == null ? Date.now() : now);
+
+    const sameDay = date.getFullYear() === current.getFullYear() &&
+      date.getMonth() === current.getMonth() &&
+      date.getDate() === current.getDate();
+    const hh = String(date.getHours()).padStart(2, '0');
+    const mm = String(date.getMinutes()).padStart(2, '0');
+    if (sameDay) return 'сегодня, ' + hh + ':' + mm;
+
+    const yesterday = new Date(current.getFullYear(), current.getMonth(), current.getDate() - 1);
+    const isYesterday = date.getFullYear() === yesterday.getFullYear() &&
+      date.getMonth() === yesterday.getMonth() &&
+      date.getDate() === yesterday.getDate();
+    if (isYesterday) return 'вчера, ' + hh + ':' + mm;
+
+    const dayMonth = date.getDate() + ' ' + MONTHS_SHORT[date.getMonth()];
+    return date.getFullYear() === current.getFullYear()
+      ? dayMonth
+      : dayMonth + ' ' + date.getFullYear();
+  }
+
+  function buildHistoryEntry(input) {
+    const data = input || {};
+    return {
+      id: String(data.id || ''),
+      path: data.path || '',
+      url: data.url || ((data.origin || '') + (data.path || '')),
+      title: clean(data.title) || 'Пост',
+      author: clean(data.author),
+      authorUrl: data.authorUrl || '',
+      avatar: data.avatar || '',
+      image: data.image || '',
+      excerpt: data.excerpt || '',
+      date: clean(data.date),
+      type: data.type === 'video' ? 'video' : 'post',
+      viewedAt: typeof data.viewedAt === 'number' ? data.viewedAt : Date.now()
+    };
+  }
+
+  function upsertHistory(list, entry, limit) {
+    const max = typeof limit === 'number' ? limit : HISTORY_LIMIT;
+    const rest = (Array.isArray(list) ? list : []).filter((item) => item && item.id !== entry.id);
+    return [entry].concat(rest).slice(0, max);
+  }
+
+  function removeHistoryEntry(list, id) {
+    return (Array.isArray(list) ? list : []).filter((item) => item && item.id !== id);
+  }
+
+  // ── Запись просмотра ──────────────────────────────────────────────────────
+  let lastUrl = '';
+  let captureTimer = 0;
+  let videoWatchTimer = 0;
+
+  function metaContent(property) {
+    const meta = document.querySelector('meta[property="' + property + '"]');
+    return meta ? (meta.getAttribute('content') || '').trim() : '';
+  }
+
+  function detectVideo(root) {
+    if (!root || !root.querySelector) return false;
+    return !!root.querySelector(
+      'video, iframe[src*="ok.ru/video"], iframe[src*="vk.com/video"], iframe[src*="vkvideo"], iframe[src*="youtube.com/embed"], [class*="VideoPlayer"], [data-test-id*="VIDEO"]'
+    );
+  }
+
+  function currentPostEntry() {
+    const info = parsePostPath(location.pathname);
+    if (!info) return null;
+
+    const post = document.querySelector('[data-post-id="' + info.id + '"]');
+    const titleEl = post ? post.querySelector('[data-test-id="COMMON_POST_POSTCONTENT:TITLE"]') : null;
+    const authorCard = post ? document.querySelector('[class*="AuthorCard"]') : null;
+    const authorLink = authorCard
+      ? authorCard.querySelector('a[href="/' + info.slug + '"]') || authorCard.querySelector('a[href^="/' + info.slug + '?"]')
+      : null;
+    const authorNameEl = authorCard ? authorCard.querySelector('[class*="authorName"]') : null;
+    const avatarEl = authorLink ? authorLink.querySelector('img') : null;
+    const dateEl = post ? document.querySelector('[data-test-id="COMMON_CREATEDAT:ROOT"]') : null;
+
+    const author = clean(authorNameEl ? authorNameEl.textContent : (authorLink ? authorLink.textContent : ''));
+    const title = cleanTitle(titleEl ? titleEl.textContent : '', author) ||
+      cleanTitle(metaContent('og:title'), author) ||
+      cleanTitle(document.title, author) ||
+      'Пост';
+
+    return buildHistoryEntry({
+      origin: location.origin,
+      id: info.id,
+      path: location.pathname.replace(/\/$/, ''),
+      title: title,
+      author: author || info.slug,
+      authorUrl: location.origin + '/' + info.slug,
+      avatar: avatarEl ? (avatarEl.currentSrc || avatarEl.getAttribute('src') || '') : '',
+      image: metaContent('og:image') || firstImage(post),
+      date: dateEl ? clean(dateEl.textContent) : '',
+      type: detectVideo(post) ? 'video' : 'post'
+    });
+  }
+
+  function capturePostView() {
+    const info = parsePostPath(location.pathname);
+    if (!info) return;
+
+    const url = location.href;
+    let attempts = 0;
+    clearTimeout(captureTimer);
+
+    const attempt = () => {
+      if (location.href !== url) return;
+      const ready = !!document.querySelector('[data-post-id="' + info.id + '"]');
+      if (!ready && attempts++ < 8) {
+        captureTimer = setTimeout(attempt, 250);
+        return;
+      }
+
+      const entry = currentPostEntry();
+      if (!entry) return;
+      state.history = upsertHistory(state.history, entry);
+      save();
+      updateBadge();
+      if (state.open && state.tab === 'history') renderList();
+      watchVideoUpgrade(entry.id, url);
+    };
+
+    attempt();
+  }
+
+  function onUrlChange() {
+    if (location.href === lastUrl) return;
+    lastUrl = location.href;
+    if (parsePostPath(location.pathname)) capturePostView();
+  }
+
+  function watchVideoUpgrade(id, url) {
+    clearTimeout(videoWatchTimer);
+    let attempts = 0;
+    const tick = () => {
+      if (location.href !== url || attempts++ >= 20) return;
+      if (detectVideo(document)) {
+        const entry = state.history.find((item) => item.id === id);
+        if (entry && entry.type !== 'video') {
+          entry.type = 'video';
+          entry.viewedAt = Date.now();
+          state.history = upsertHistory(state.history, entry);
+          save();
+          if (state.open && state.tab === 'history') renderList();
+        }
+        return;
+      }
+      videoWatchTimer = setTimeout(tick, 500);
+    };
+    videoWatchTimer = setTimeout(tick, 500);
   }
 
   const itemCount = () => Object.keys(state.items).length;
@@ -231,7 +480,7 @@
     state.items[item.id] = item;
     save();
     syncUI();
-    toast('Добавлено в избранное', 'Открыть', () => openPanel());
+    toast('Добавлено в избранное', 'Открыть', () => openPanel('favorites'));
     return true;
   }
 
@@ -243,6 +492,33 @@
     syncUI();
     toast('Убрано из избранного', 'Вернуть', () => {
       state.items[id] = existing;
+      save();
+      syncUI();
+    });
+  }
+
+  function removeHistoryItem(id) {
+    const index = state.history.findIndex((item) => item.id === id);
+    if (index < 0) return;
+    const entry = state.history[index];
+    state.history = removeHistoryEntry(state.history, id);
+    save();
+    syncUI();
+    toast('Убрано из истории', 'Вернуть', () => {
+      state.history.splice(Math.min(index, state.history.length), 0, entry);
+      save();
+      syncUI();
+    });
+  }
+
+  function clearHistory() {
+    if (!state.history.length) return;
+    const old = state.history.slice();
+    state.history = [];
+    save();
+    syncUI();
+    toast('История очищена', 'Вернуть', () => {
+      state.history = old;
       save();
       syncUI();
     });
@@ -327,20 +603,21 @@
     }
   }
 
-  // ── Верхняя кнопка ────────────────────────────────────────────────────────
-  function buildTopButton() {
+  // ── Верхние кнопки ────────────────────────────────────────────────────────
+  function buildTopButton(kind) {
+    const isHistory = kind === 'history';
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'tm-bo-top';
-    btn.dataset.tmBo = 'top';
-    btn.innerHTML = starSVG(24);
-    btn.title = 'Избранное';
-    btn.setAttribute('aria-label', 'Открыть избранное');
+    btn.dataset.tmBo = kind;
+    btn.innerHTML = isHistory ? clockSVG(24) : starSVG(24);
+    btn.title = isHistory ? 'История' : 'Избранное';
+    btn.setAttribute('aria-label', isHistory ? 'Открыть историю' : 'Открыть избранное');
     btn.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      if (state.open) closePanel();
-      else openPanel();
+      if (state.open && state.tab === kind) closePanel();
+      else openPanel(kind);
     });
     return btn;
   }
@@ -353,19 +630,27 @@
     return menu.querySelector('[class*="RightButtons"]') || menu.lastElementChild;
   }
 
-  function ensureTopButton() {
-    if (!topBtn) topBtn = buildTopButton();
-    if (topBtn.isConnected) return;
+  function ensureTopButtons() {
+    if (!topBtn) topBtn = buildTopButton('favorites');
+    if (!historyBtn) historyBtn = buildTopButton('history');
+    if (topBtn.isConnected && historyBtn.isConnected) return;
     const holder = topMenuCandidate();
     if (!holder) return;
-    holder.insertBefore(topBtn, holder.firstElementChild);
+    if (!topBtn.isConnected) holder.insertBefore(topBtn, holder.firstElementChild);
+    if (!historyBtn.isConnected) holder.insertBefore(historyBtn, topBtn);
   }
 
   function updateBadge() {
-    if (!topBtn) return;
     const n = itemCount();
-    topBtn.title = n ? 'Избранное: ' + n : 'Избранное';
-    topBtn.setAttribute('aria-label', n ? 'Открыть избранное, постов: ' + n : 'Открыть избранное');
+    if (topBtn) {
+      topBtn.title = n ? 'Избранное: ' + n : 'Избранное';
+      topBtn.setAttribute('aria-label', n ? 'Открыть избранное, постов: ' + n : 'Открыть избранное');
+    }
+    if (historyBtn) {
+      const h = state.history.length;
+      historyBtn.title = h ? 'История: ' + h : 'История';
+      historyBtn.setAttribute('aria-label', h ? 'Открыть историю, записей: ' + h : 'Открыть историю');
+    }
   }
 
   // ── Панель «Избранное» ────────────────────────────────────────────────────
@@ -384,23 +669,41 @@
     panel.tabIndex = -1;
     panel.setAttribute('role', 'dialog');
     panel.setAttribute('aria-modal', 'true');
-    panel.setAttribute('aria-label', 'Избранное');
+    panel.setAttribute('aria-label', 'Boosty Plus');
     panel.setAttribute('aria-hidden', 'true');
 
     const head = el('div', 'tm-bo-panel__head');
-    const titleWrap = el('div', 'tm-bo-panel__title');
-    const star = el('span', 'tm-bo-panel__title-star');
-    star.innerHTML = starSVG(20);
-    countEl = el('span', 'tm-bo-panel__count', '0');
-    titleWrap.append(star, el('span', null, 'Избранное'), countEl);
+    tabsEl = el('div', 'tm-bo-tabs');
+    tabsEl.setAttribute('role', 'tablist');
+    tabsEl.setAttribute('aria-label', 'Разделы Boosty Plus');
+
+    const favTab = el('button', 'tm-bo-tab');
+    favTab.type = 'button';
+    favTab.dataset.tab = 'favorites';
+    favTab.setAttribute('role', 'tab');
+    favTab.innerHTML = starSVG(18) + '<span>Избранное</span>';
+    favCountEl = el('span', 'tm-bo-panel__count', '0');
+    favTab.append(favCountEl);
+    favTab.addEventListener('click', () => switchTab('favorites'));
+
+    const histTab = el('button', 'tm-bo-tab');
+    histTab.type = 'button';
+    histTab.dataset.tab = 'history';
+    histTab.setAttribute('role', 'tab');
+    histTab.innerHTML = clockSVG(18) + '<span>История</span>';
+    histCountEl = el('span', 'tm-bo-panel__count', '0');
+    histTab.append(histCountEl);
+    histTab.addEventListener('click', () => switchTab('history'));
+
+    tabsEl.append(histTab, favTab);
 
     const close = el('button', 'tm-bo-icon-btn', '✕');
     close.type = 'button';
     close.title = 'Закрыть';
-    close.setAttribute('aria-label', 'Закрыть избранное');
+    close.setAttribute('aria-label', 'Закрыть Boosty Plus');
     close.addEventListener('click', closePanel);
 
-    head.append(titleWrap, close);
+    head.append(tabsEl, close);
 
     searchWrap = el('div', 'tm-bo-panel__search');
     searchInput = el('input', 'tm-bo-panel__input');
@@ -413,11 +716,18 @@
     });
     searchWrap.append(searchInput);
 
+    toolsEl = el('div', 'tm-bo-panel__tools');
+    toolsEl.append(el('span', 'tm-bo-panel__tools-text', 'Последние 30'));
+    const clear = el('button', 'tm-bo-panel__clear', 'Очистить');
+    clear.type = 'button';
+    clear.addEventListener('click', clearHistory);
+    toolsEl.append(clear);
+
     listEl = el('div', 'tm-bo-panel__list');
 
-    const foot = el('div', 'tm-bo-panel__foot', 'Хранится в этом браузере');
+    footEl = el('div', 'tm-bo-panel__foot', 'Хранится в этом браузере');
 
-    panel.append(head, searchWrap, listEl, foot);
+    panel.append(head, searchWrap, toolsEl, listEl, footEl);
 
     toastEl = el('div', 'tm-bo-toast');
     toastEl.setAttribute('role', 'status');
@@ -430,15 +740,26 @@
     });
   }
 
-  function openPanel() {
+  function switchTab(tab) {
+    state.tab = tab === 'history' ? 'history' : 'favorites';
+    state.filter = '';
+    if (searchInput) searchInput.value = '';
+    renderTabs();
+    renderList();
+  }
+
+  function openPanel(tab) {
     if (!panel) buildPanel();
+    if (tab === 'favorites' || tab === 'history') state.tab = tab;
     state.open = true;
     state.lastFocus = document.activeElement;
     panel.classList.add('is-open');
     overlay.classList.add('is-open');
     panel.setAttribute('aria-hidden', 'false');
-    topBtn && topBtn.classList.add('is-open');
+    topBtn && topBtn.classList.toggle('is-open', state.tab === 'favorites');
+    historyBtn && historyBtn.classList.toggle('is-open', state.tab === 'history');
     if (searchInput) searchInput.value = state.filter;
+    renderTabs();
     renderList();
     panel.focus({ preventScroll: true });
   }
@@ -450,6 +771,7 @@
     overlay.classList.remove('is-open');
     panel.setAttribute('aria-hidden', 'true');
     topBtn && topBtn.classList.remove('is-open');
+    historyBtn && historyBtn.classList.remove('is-open');
     state.filter = '';
     if (searchInput) searchInput.value = '';
     if (state.lastFocus && state.lastFocus.focus) {
@@ -474,7 +796,7 @@
     return letter;
   }
 
-  function thumbNode(item) {
+  function thumbNode(item, placeholder) {
     const box = el('div', 'tm-bo-item__thumb');
     if (item.image) {
       const img = el('img');
@@ -483,9 +805,9 @@
       img.loading = 'lazy';
       box.append(img);
     } else {
-      const star = el('span', 'tm-bo-item__thumb-star');
-      star.innerHTML = starSVG(26);
-      box.append(star);
+      const icon = el('span', 'tm-bo-item__thumb-star');
+      icon.innerHTML = placeholder === 'clock' ? clockSVG(26) : starSVG(26);
+      box.append(icon);
     }
     return box;
   }
@@ -537,6 +859,52 @@
     return node;
   }
 
+  function historyItemNode(item) {
+    const node = el('div', 'tm-bo-item');
+    node.tabIndex = 0;
+    node.setAttribute('role', 'link');
+    node.setAttribute('aria-label', 'Открыть пост: ' + item.title);
+
+    const open = () => {
+      location.href = item.url;
+    };
+    node.addEventListener('click', (e) => {
+      if (e.target.closest('.tm-bo-item__remove')) return;
+      open();
+    });
+    node.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        if (e.target.closest('.tm-bo-item__remove')) return;
+        e.preventDefault();
+        open();
+      }
+    });
+
+    const body = el('div', 'tm-bo-item__body');
+    body.append(el('div', 'tm-bo-item__title', item.title));
+
+    const meta = el('div', 'tm-bo-item__meta');
+    meta.append(avatarNode(item));
+    const metaText = [item.author, relativeViewedAt(item.viewedAt)].filter(Boolean).join(' · ');
+    meta.append(el('span', 'tm-bo-item__meta-text', metaText || 'Boosty'));
+    body.append(meta);
+
+    if (item.type === 'video') body.append(el('span', 'tm-bo-item__badge', 'видео'));
+
+    const remove = el('button', 'tm-bo-item__remove tm-bo-item__remove_text', '×');
+    remove.type = 'button';
+    remove.title = 'Убрать из истории';
+    remove.setAttribute('aria-label', 'Убрать из истории');
+    remove.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      removeHistoryItem(item.id);
+    });
+
+    node.append(thumbNode(item, 'clock'), body, remove);
+    return node;
+  }
+
   function emptyNode() {
     const box = el('div', 'tm-bo-empty');
     const star = el('div', 'tm-bo-empty__star');
@@ -549,18 +917,63 @@
     return box;
   }
 
+  function historyEmptyNode() {
+    const box = el('div', 'tm-bo-empty');
+    const clock = el('div', 'tm-bo-empty__clock');
+    clock.innerHTML = clockSVG(46);
+    box.append(
+      clock,
+      el('div', 'tm-bo-empty__title', 'Пока пусто'),
+      el('div', 'tm-bo-empty__text', 'Открой любой пост или видео на Boosty — он появится здесь.')
+    );
+    return box;
+  }
+
+  function renderTabs() {
+    if (!tabsEl) return;
+    const isHistory = state.tab === 'history';
+    const favCount = itemCount();
+    const histCount = state.history.length;
+
+    if (favCountEl) favCountEl.textContent = favCount > 99 ? '99+' : String(favCount);
+    if (histCountEl) histCountEl.textContent = histCount > 99 ? '99+' : String(histCount);
+
+    tabsEl.querySelectorAll('.tm-bo-tab').forEach((tab) => {
+      const active = tab.dataset.tab === state.tab;
+      tab.classList.toggle('is-active', active);
+      tab.setAttribute('aria-selected', active ? 'true' : 'false');
+    });
+
+    searchWrap.hidden = isHistory || favCount === 0;
+    toolsEl.hidden = !isHistory;
+    if (footEl) {
+      footEl.textContent = isHistory
+        ? 'Последние 30 · хранится в этом браузере'
+        : 'Хранится в этом браузере';
+    }
+  }
+
   function renderList() {
     if (!listEl) return;
-    const all = sortedItems();
-    countEl.textContent = all.length > 99 ? '99+' : String(all.length);
+    renderTabs();
+    listEl.textContent = '';
 
+    if (state.tab === 'history') {
+      if (!state.history.length) {
+        listEl.append(historyEmptyNode());
+        return;
+      }
+      const historyFrag = document.createDocumentFragment();
+      for (const item of state.history) historyFrag.append(historyItemNode(item));
+      listEl.append(historyFrag);
+      return;
+    }
+
+    const all = sortedItems();
     const q = state.filter.trim().toLowerCase();
     const items = q
       ? all.filter((it) => (it.title + ' ' + it.author + ' ' + it.excerpt).toLowerCase().includes(q))
       : all;
-
-    searchWrap.hidden = all.length === 0;
-    listEl.textContent = '';
 
     if (!items.length) {
       if (!all.length) {
@@ -626,10 +1039,88 @@
       }
       .tm-bo-star-btn.is-active .tm-bo-star-svg path,
       .tm-bo-item__remove .tm-bo-star-svg path,
-      .tm-bo-empty__star .tm-bo-star-svg path,
-      .tm-bo-panel__title-star .tm-bo-star-svg path {
+      .tm-bo-empty__star .tm-bo-star-svg path {
         fill: currentColor;
       }
+
+      .tm-bo-clock-svg path,
+      .tm-bo-clock-svg polyline {
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 1.6;
+        stroke-linejoin: round;
+        stroke-linecap: round;
+      }
+      .tm-bo-top .tm-bo-clock-svg path,
+      .tm-bo-top .tm-bo-clock-svg polyline { stroke-width: 1.8; }
+
+      /* вкладки панели */
+      .tm-bo-tabs { display: flex; align-items: center; gap: 4px; min-width: 0; }
+      .tm-bo-tab {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        height: 34px;
+        padding: 0 10px;
+        border: 0;
+        border-radius: 10px;
+        background: transparent;
+        color: var(--var-color-text-secondary, #8c8c8c);
+        font: inherit;
+        font-size: 14px;
+        font-weight: 600;
+        cursor: pointer;
+        white-space: nowrap;
+        transition: background .15s ease, color .15s ease;
+        -webkit-tap-highlight-color: transparent;
+      }
+      .tm-bo-tab:hover { background: var(--var-color-chip-bg, rgba(127,127,127,.14)); color: var(--var-color-text-primary, #f1f1f1); }
+      .tm-bo-tab.is-active { background: var(--var-color-chip-bg, rgba(127,127,127,.14)); color: var(--var-color-text-primary, #f1f1f1); }
+      .tm-bo-tab .tm-bo-star-svg path { fill: currentColor; }
+      .tm-bo-tab .tm-bo-panel__count { min-width: 20px; height: 20px; font-size: 11px; }
+
+      /* инструменты истории */
+      .tm-bo-panel__tools {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 10px 18px 2px;
+        flex: 0 0 auto;
+        color: var(--var-color-text-secondary, #8c8c8c);
+        font-size: 12px;
+      }
+      .tm-bo-panel__search[hidden],
+      .tm-bo-panel__tools[hidden] { display: none; }
+      .tm-bo-panel__clear {
+        border: 0;
+        padding: 4px 8px;
+        border-radius: 8px;
+        background: transparent;
+        color: var(--color-brand, #f15f2c);
+        font: inherit;
+        font-size: 12px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      .tm-bo-panel__clear:hover { background: var(--var-color-chip-bg, rgba(127,127,127,.14)); }
+
+      /* бейдж «видео» */
+      .tm-bo-item__badge {
+        display: inline-flex;
+        align-self: flex-start;
+        margin-top: 6px;
+        padding: 2px 7px;
+        border-radius: 7px;
+        background: var(--var-color-chip-bg, rgba(127,127,127,.14));
+        color: var(--var-color-text-secondary, #8c8c8c);
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: .01em;
+      }
+      .tm-bo-item__remove_text { font-size: 18px; line-height: 1; color: var(--var-color-text-secondary, #8c8c8c); }
+      .tm-bo-item__remove_text:hover { color: var(--var-color-text-primary, #f1f1f1); }
+      .tm-bo-empty__clock { color: var(--var-color-text-secondary, #8c8c8c); opacity: .5; margin-bottom: 14px; }
 
       /* кнопка в шапке */
       .tm-bo-top {
@@ -652,8 +1143,8 @@
       }
       // звезда в шапке — та же обводка, что у иконок уведомлений и сообщений
       .tm-bo-top .tm-bo-star-svg path { stroke-width: 1.8; }
-      .tm-bo-top:hover { background: var(--var-color-chip-bg-hover, rgba(127,127,127,.2)); color: var(--color-brand, #f15f2c); }
-      .tm-bo-top.is-open { background: var(--var-color-chip-bg-hover, rgba(127,127,127,.2)); color: var(--color-brand, #f15f2c); }
+      .tm-bo-top:hover { background: var(--var-color-chip-bg-hover, rgba(127,127,127,.2)); color: var(--var-color-text-primary, #f1f1f1); }
+      .tm-bo-top.is-open { background: var(--var-color-chip-bg-hover, rgba(127,127,127,.2)); color: var(--var-color-text-primary, #f1f1f1); }
 
       /* звезда в карточке поста */
       .tm-bo-star-btn {
@@ -732,15 +1223,6 @@
         border-bottom: 1px solid var(--var-color-base-border, #3c3c3c);
         flex: 0 0 auto;
       }
-      .tm-bo-panel__title {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        font-size: 18px;
-        font-weight: 700;
-        letter-spacing: -.01em;
-      }
-      .tm-bo-panel__title-star { display: inline-flex; color: var(--color-brand, #f15f2c); }
       .tm-bo-panel__count {
         display: inline-flex;
         align-items: center;
@@ -969,8 +1451,9 @@
 
   // ── Запуск и слежение за SPA ──────────────────────────────────────────────
   function scan() {
+    onUrlChange();
     injectStyles();
-    ensureTopButton();
+    ensureTopButtons();
     mountPostStars();
     updateBadge();
   }
@@ -988,6 +1471,11 @@
       document.addEventListener('DOMContentLoaded', init, { once: true });
       return;
     }
+
+    const stored = readStore(localStorage);
+    state.items = stored.items;
+    state.history = stored.history;
+    if (!localStorage.getItem(STORE_KEY)) save();
 
     scan();
     buildPanel();
@@ -1009,12 +1497,23 @@
     // синхронизация между вкладками
     window.addEventListener('storage', (e) => {
       if (e.key !== STORE_KEY) return;
-      state.items = load();
+      const stored = readStore(localStorage);
+      state.items = stored.items;
+      state.history = stored.history;
       syncUI();
     });
 
-    console.log('[Boosty fav] избранное запущено');
+    console.log('[Boosty Plus] запущен');
   }
 
-  init();
+  if (typeof document === 'undefined' && typeof module === 'object' && module.exports) {
+    module.exports = {
+      normalizeStore, readStore, saveStore,
+      parsePostPath, cleanTitle, relativeViewedAt,
+      buildHistoryEntry, upsertHistory, removeHistoryEntry,
+      STORE_KEY, LEGACY_STORE_KEY, HISTORY_LIMIT
+    };
+  } else {
+    init();
+  }
 })();
