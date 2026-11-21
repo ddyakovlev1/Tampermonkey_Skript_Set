@@ -81,6 +81,7 @@ test('cleanTitle: убирает хвосты автора и Boosty', () => {
   assert.equal(cleanTitle('  Пост  '), 'Пост');
   assert.equal(cleanTitle(' - Автор', 'Автор'), '');
   assert.equal(cleanTitle('Boosty'), '');
+  assert.equal(cleanTitle('Заголовок - Автор - Boosty', 'Автор'), 'Заголовок');
 });
 
 test('relativeViewedAt: сегодня, вчера, дата', () => {

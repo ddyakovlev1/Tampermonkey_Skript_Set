@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Boosty Plus
 // @namespace    danil.boosty.plus
-// @version      2.0.1
+// @version      2.0.2
 // @description  Звёздочка у постов, «Избранное» и «История» последних 30 просмотров на Boosty. Всё хранится в браузере.
 // @match        https://boosty.to/*
 // @icon         https://boosty.to/favicon.png?v=15
@@ -148,10 +148,15 @@
     const suffixes = [];
     if (author) suffixes.push(' - ' + clean(author));
     suffixes.push(' - Boosty', ' | Boosty');
-    for (const suffix of suffixes) {
-      if (suffix && title.endsWith(suffix)) {
-        title = title.slice(0, -suffix.length).trim();
-        break;
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const suffix of suffixes) {
+        if (suffix && title.endsWith(suffix)) {
+          title = title.slice(0, -suffix.length).trim();
+          changed = true;
+          break;
+        }
       }
     }
     title = title.replace(/^[-|]\s*/, '').trim();
@@ -234,14 +239,21 @@
     if (!info) return null;
 
     const post = document.querySelector('[data-post-id="' + info.id + '"]');
+    const layout = post
+      ? post.closest('[data-test-id="BLOGLAYOUTWRAPPER:ROOT"], [class*="BlogLayoutWrapper"]') || post
+      : null;
     const titleEl = post ? post.querySelector('[data-test-id="COMMON_POST_POSTCONTENT:TITLE"]') : null;
-    const authorCard = post ? document.querySelector('[class*="AuthorCard"]') : null;
+    const authorCard = post
+      ? (post.querySelector('[class*="AuthorCard"]') || layout.querySelector('[class*="AuthorCard"]'))
+      : null;
     const authorLink = authorCard
       ? authorCard.querySelector('a[href="/' + info.slug + '"]') || authorCard.querySelector('a[href^="/' + info.slug + '?"]')
       : null;
     const authorNameEl = authorCard ? authorCard.querySelector('[class*="authorName"]') : null;
     const avatarEl = authorLink ? authorLink.querySelector('img') : null;
-    const dateEl = post ? document.querySelector('[data-test-id="COMMON_CREATEDAT:ROOT"]') : null;
+    const dateEl = post
+      ? (post.querySelector('[data-test-id="COMMON_CREATEDAT:ROOT"]') || layout.querySelector('[data-test-id="COMMON_CREATEDAT:ROOT"]'))
+      : null;
 
     const author = clean(authorNameEl ? authorNameEl.textContent : (authorLink ? authorLink.textContent : ''));
     const title = cleanTitle(titleEl ? titleEl.textContent : '', author) ||
