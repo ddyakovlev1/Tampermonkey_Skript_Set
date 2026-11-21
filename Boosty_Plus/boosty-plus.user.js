@@ -139,6 +139,8 @@
         break;
       }
     }
+    title = title.replace(/^[-|]\s*/, '').trim();
+    if (!title || title === 'Boosty' || (author && title === clean(author))) return '';
     return title;
   }
 
@@ -193,6 +195,112 @@
 
   function removeHistoryEntry(list, id) {
     return (Array.isArray(list) ? list : []).filter((item) => item && item.id !== id);
+  }
+
+  // ── Запись просмотра ──────────────────────────────────────────────────────
+  let lastUrl = '';
+  let captureTimer = 0;
+  let videoWatchTimer = 0;
+
+  function metaContent(property) {
+    const meta = document.querySelector('meta[property="' + property + '"]');
+    return meta ? (meta.getAttribute('content') || '').trim() : '';
+  }
+
+  function detectVideo(root) {
+    if (!root || !root.querySelector) return false;
+    return !!root.querySelector(
+      'video, iframe[src*="ok.ru/video"], iframe[src*="vk.com/video"], iframe[src*="vkvideo"], iframe[src*="youtube.com/embed"], [class*="VideoPlayer"], [data-test-id*="VIDEO"]'
+    );
+  }
+
+  function currentPostEntry() {
+    const info = parsePostPath(location.pathname);
+    if (!info) return null;
+
+    const post = document.querySelector('[data-post-id="' + info.id + '"]');
+    const titleEl = post ? post.querySelector('[data-test-id="COMMON_POST_POSTCONTENT:TITLE"]') : null;
+    const authorCard = post ? document.querySelector('[class*="AuthorCard"]') : null;
+    const authorLink = authorCard
+      ? authorCard.querySelector('a[href="/' + info.slug + '"]') || authorCard.querySelector('a[href^="/' + info.slug + '?"]')
+      : null;
+    const authorNameEl = authorCard ? authorCard.querySelector('[class*="authorName"]') : null;
+    const avatarEl = authorLink ? authorLink.querySelector('img') : null;
+    const dateEl = post ? document.querySelector('[data-test-id="COMMON_CREATEDAT:ROOT"]') : null;
+
+    const author = clean(authorNameEl ? authorNameEl.textContent : (authorLink ? authorLink.textContent : ''));
+    const title = cleanTitle(titleEl ? titleEl.textContent : '', author) ||
+      cleanTitle(metaContent('og:title'), author) ||
+      cleanTitle(document.title, author) ||
+      'Пост';
+
+    return buildHistoryEntry({
+      origin: location.origin,
+      id: info.id,
+      path: location.pathname.replace(/\/$/, ''),
+      title: title,
+      author: author || info.slug,
+      authorUrl: location.origin + '/' + info.slug,
+      avatar: avatarEl ? (avatarEl.currentSrc || avatarEl.getAttribute('src') || '') : '',
+      image: metaContent('og:image') || firstImage(post),
+      date: dateEl ? clean(dateEl.textContent) : '',
+      type: detectVideo(post) ? 'video' : 'post'
+    });
+  }
+
+  function capturePostView() {
+    const info = parsePostPath(location.pathname);
+    if (!info) return;
+
+    const url = location.href;
+    let attempts = 0;
+    clearTimeout(captureTimer);
+
+    const attempt = () => {
+      if (location.href !== url) return;
+      const ready = !!document.querySelector('[data-post-id="' + info.id + '"]');
+      if (!ready && attempts++ < 8) {
+        captureTimer = setTimeout(attempt, 250);
+        return;
+      }
+
+      const entry = currentPostEntry();
+      if (!entry) return;
+      state.history = upsertHistory(state.history, entry);
+      save();
+      updateBadge();
+      if (state.open && state.tab === 'history') renderList();
+      watchVideoUpgrade(entry.id, url);
+    };
+
+    attempt();
+  }
+
+  function onUrlChange() {
+    if (location.href === lastUrl) return;
+    lastUrl = location.href;
+    if (parsePostPath(location.pathname)) capturePostView();
+  }
+
+  function watchVideoUpgrade(id, url) {
+    clearTimeout(videoWatchTimer);
+    let attempts = 0;
+    const tick = () => {
+      if (location.href !== url || attempts++ >= 20) return;
+      if (detectVideo(document)) {
+        const entry = state.history.find((item) => item.id === id);
+        if (entry && entry.type !== 'video') {
+          entry.type = 'video';
+          entry.viewedAt = Date.now();
+          state.history = upsertHistory(state.history, entry);
+          save();
+          if (state.open && state.tab === 'history') renderList();
+        }
+        return;
+      }
+      videoWatchTimer = setTimeout(tick, 500);
+    };
+    videoWatchTimer = setTimeout(tick, 500);
   }
 
   const itemCount = () => Object.keys(state.items).length;
@@ -1095,6 +1203,7 @@
 
   // ── Запуск и слежение за SPA ──────────────────────────────────────────────
   function scan() {
+    onUrlChange();
     injectStyles();
     ensureTopButton();
     mountPostStars();
