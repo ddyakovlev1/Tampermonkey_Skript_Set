@@ -118,6 +118,83 @@
     saveStore(localStorage, state.items, state.history);
   }
 
+  // ── Модель истории ────────────────────────────────────────────────────────
+  const POST_PAGE_RE = /^\/([^/]+)\/posts\/([0-9a-zA-Z-]{8,})\/?$/;
+  const MONTHS_SHORT = ['янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
+
+  function parsePostPath(pathname) {
+    const m = (pathname || '').match(POST_PAGE_RE);
+    return m ? { slug: m[1], id: m[2] } : null;
+  }
+
+  function cleanTitle(raw, author) {
+    let title = clean(raw);
+    if (!title) return '';
+    const suffixes = [];
+    if (author) suffixes.push(' - ' + clean(author));
+    suffixes.push(' - Boosty', ' | Boosty');
+    for (const suffix of suffixes) {
+      if (suffix && title.endsWith(suffix)) {
+        title = title.slice(0, -suffix.length).trim();
+        break;
+      }
+    }
+    return title;
+  }
+
+  function relativeViewedAt(ts, now) {
+    if (!ts) return '';
+    const date = new Date(ts);
+    if (isNaN(date.getTime())) return '';
+    const current = new Date(now == null ? Date.now() : now);
+
+    const sameDay = date.getFullYear() === current.getFullYear() &&
+      date.getMonth() === current.getMonth() &&
+      date.getDate() === current.getDate();
+    const hh = String(date.getHours()).padStart(2, '0');
+    const mm = String(date.getMinutes()).padStart(2, '0');
+    if (sameDay) return 'сегодня, ' + hh + ':' + mm;
+
+    const yesterday = new Date(current.getFullYear(), current.getMonth(), current.getDate() - 1);
+    const isYesterday = date.getFullYear() === yesterday.getFullYear() &&
+      date.getMonth() === yesterday.getMonth() &&
+      date.getDate() === yesterday.getDate();
+    if (isYesterday) return 'вчера, ' + hh + ':' + mm;
+
+    const dayMonth = date.getDate() + ' ' + MONTHS_SHORT[date.getMonth()];
+    return date.getFullYear() === current.getFullYear()
+      ? dayMonth
+      : dayMonth + ' ' + date.getFullYear();
+  }
+
+  function buildHistoryEntry(input) {
+    const data = input || {};
+    return {
+      id: String(data.id || ''),
+      path: data.path || '',
+      url: data.url || ((data.origin || '') + (data.path || '')),
+      title: clean(data.title) || 'Пост',
+      author: clean(data.author),
+      authorUrl: data.authorUrl || '',
+      avatar: data.avatar || '',
+      image: data.image || '',
+      excerpt: data.excerpt || '',
+      date: clean(data.date),
+      type: data.type === 'video' ? 'video' : 'post',
+      viewedAt: typeof data.viewedAt === 'number' ? data.viewedAt : Date.now()
+    };
+  }
+
+  function upsertHistory(list, entry, limit) {
+    const max = typeof limit === 'number' ? limit : HISTORY_LIMIT;
+    const rest = (Array.isArray(list) ? list : []).filter((item) => item && item.id !== entry.id);
+    return [entry].concat(rest).slice(0, max);
+  }
+
+  function removeHistoryEntry(list, id) {
+    return (Array.isArray(list) ? list : []).filter((item) => item && item.id !== id);
+  }
+
   const itemCount = () => Object.keys(state.items).length;
 
   function sortedItems() {
@@ -1074,6 +1151,8 @@
   if (typeof document === 'undefined' && typeof module === 'object' && module.exports) {
     module.exports = {
       normalizeStore, readStore, saveStore,
+      parsePostPath, cleanTitle, relativeViewedAt,
+      buildHistoryEntry, upsertHistory, removeHistoryEntry,
       STORE_KEY, LEGACY_STORE_KEY, HISTORY_LIMIT
     };
   } else {

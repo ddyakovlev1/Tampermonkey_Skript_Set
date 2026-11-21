@@ -2,6 +2,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
   normalizeStore, readStore, saveStore,
+  parsePostPath, cleanTitle, relativeViewedAt,
+  buildHistoryEntry, upsertHistory, removeHistoryEntry,
   STORE_KEY, LEGACY_STORE_KEY, HISTORY_LIMIT
 } = require('../boosty-plus.user.js');
 
@@ -59,4 +61,60 @@ test('saveStore: пишет оба раздела в новый ключ', () =>
   assert.deepEqual(JSON.parse(map.get(STORE_KEY)), {
     v: 1, items: { a: { id: 'a' } }, history: [{ id: 'h', url: 'u', viewedAt: 1 }]
   });
+});
+
+test('parsePostPath: страница поста и мусор', () => {
+  assert.deepEqual(parsePostPath('/blog/posts/123e4567-e89b-12d3-a456-426614174000'), {
+    slug: 'blog', id: '123e4567-e89b-12d3-a456-426614174000'
+  });
+  assert.deepEqual(parsePostPath('/blog/posts/123e4567-e89b-12d3-a456-426614174000/'), {
+    slug: 'blog', id: '123e4567-e89b-12d3-a456-426614174000'
+  });
+  assert.equal(parsePostPath('/blog'), null);
+  assert.equal(parsePostPath('/blog/posts/123e4567-e89b-12d3-a456-426614174000/comments'), null);
+});
+
+test('cleanTitle: убирает хвосты автора и Boosty', () => {
+  assert.equal(cleanTitle('Пост - Автор', 'Автор'), 'Пост');
+  assert.equal(cleanTitle('Пост - Boosty'), 'Пост');
+  assert.equal(cleanTitle('  Пост | Boosty  '), 'Пост');
+  assert.equal(cleanTitle('  Пост  '), 'Пост');
+});
+
+test('relativeViewedAt: сегодня, вчера, дата', () => {
+  const now = new Date(2026, 10, 21, 15, 0).getTime();
+  assert.equal(relativeViewedAt(new Date(2026, 10, 21, 14, 5).getTime(), now), 'сегодня, 14:05');
+  assert.equal(relativeViewedAt(new Date(2026, 10, 20, 9, 30).getTime(), now), 'вчера, 09:30');
+  assert.equal(relativeViewedAt(new Date(2026, 2, 5, 12, 0).getTime(), now), '5 мар');
+  assert.equal(relativeViewedAt(new Date(2024, 2, 5, 12, 0).getTime(), now), '5 мар 2024');
+});
+
+test('buildHistoryEntry: значения по умолчанию и нормализация', () => {
+  const entry = buildHistoryEntry({
+    origin: 'https://boosty.to', id: 'p1', path: '/blog/posts/p1',
+    title: '  Заголовок  ', author: ' Автор ', viewedAt: 10
+  });
+  assert.equal(entry.url, 'https://boosty.to/blog/posts/p1');
+  assert.equal(entry.title, 'Заголовок');
+  assert.equal(entry.author, 'Автор');
+  assert.equal(entry.type, 'post');
+  assert.equal(entry.viewedAt, 10);
+  assert.equal(buildHistoryEntry({ origin: 'https://boosty.to', id: 'p2', path: '/blog/posts/p2', viewedAt: 1 }).title, 'Пост');
+  assert.equal(buildHistoryEntry({ origin: 'https://boosty.to', id: 'p3', path: '/blog/posts/p3', type: 'video', viewedAt: 1 }).type, 'video');
+});
+
+test('upsertHistory: наверх, без дублей, с лимитом', () => {
+  const list = [{ id: 'a', viewedAt: 1 }, { id: 'b', viewedAt: 2 }];
+  assert.deepEqual(upsertHistory(list, { id: 'a', viewedAt: 3 }).map((x) => x.id), ['a', 'b']);
+  assert.equal(upsertHistory(list, { id: 'a', viewedAt: 3 }).length, 2);
+  const many = Array.from({ length: 30 }, (_, i) => ({ id: 'p' + i, viewedAt: 30 - i }));
+  const out = upsertHistory(many, { id: 'new', viewedAt: 100 });
+  assert.equal(out.length, 30);
+  assert.equal(out[0].id, 'new');
+  assert.equal(out.some((x) => x.id === 'p29'), false);
+});
+
+test('removeHistoryEntry: убирает только совпавший id', () => {
+  const list = [{ id: 'a' }, { id: 'b' }];
+  assert.deepEqual(removeHistoryEntry(list, 'a'), [{ id: 'b' }]);
 });
