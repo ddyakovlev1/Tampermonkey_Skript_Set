@@ -1143,8 +1143,8 @@
       }
       // звезда в шапке — та же обводка, что у иконок уведомлений и сообщений
       .tm-bo-top .tm-bo-star-svg path { stroke-width: 1.8; }
-      .tm-bo-top:hover { background: var(--var-color-chip-bg-hover, rgba(127,127,127,.2)); color: var(--color-brand, #f15f2c); }
-      .tm-bo-top.is-open { background: var(--var-color-chip-bg-hover, rgba(127,127,127,.2)); color: var(--color-brand, #f15f2c); }
+      .tm-bo-top:hover { background: var(--var-color-chip-bg-hover, rgba(127,127,127,.2)); color: var(--var-color-text-primary, #f1f1f1); }
+      .tm-bo-top.is-open { background: var(--var-color-chip-bg-hover, rgba(127,127,127,.2)); color: var(--var-color-text-primary, #f1f1f1); }
 
       /* звезда в карточке поста */
       .tm-bo-star-btn {
