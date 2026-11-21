@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Boosty Plus
 // @namespace    danil.boosty.plus
-// @version      2.0.0
+// @version      2.0.1
 // @description  Звёздочка у постов, «Избранное» и «История» последних 30 просмотров на Boosty. Всё хранится в браузере.
 // @match        https://boosty.to/*
 // @icon         https://boosty.to/favicon.png?v=15
@@ -318,6 +318,97 @@
     videoWatchTimer = setTimeout(tick, 500);
   }
 
+  // ── Старт видео ───────────────────────────────────────────────────────────
+  const VIDEO_TRIGGER_SEL = [
+    '[class*="playButton"]',
+    '[class*="VideoPlayerContainer"] [class*="preview"]',
+    'iframe[src*="ok.ru/video"]',
+    'iframe[src*="vk.com/video"]',
+    'iframe[src*="vkvideo"]',
+    'iframe[src*="youtube.com/embed"]',
+    'iframe[src*="kinescope.io"]',
+    'iframe[src*="vimeo.com"]'
+  ].join(',');
+
+  const watchedVideoPlayers = new WeakSet();
+
+  function backgroundImage(el) {
+    if (!el) return '';
+    const value = window.getComputedStyle(el).backgroundImage || '';
+    const m = value.match(/url\(["']?(.*?)["']?\)/);
+    return m ? m[1] : '';
+  }
+
+  function videoPostContext(target) {
+    if (!target || !target.closest) return null;
+    const post = target.closest('[data-post-id]');
+    if (post) return post;
+    const layer = target.closest('[role="dialog"], [class*="Layer-scss"], [class*="Layer-"]');
+    return layer ? layer.querySelector('[data-post-id]') : null;
+  }
+
+  function recordVideoStart(target) {
+    const post = videoPostContext(target);
+    let item = null;
+
+    if (post) {
+      item = makeItem(post);
+      if (item) {
+        const cover = backgroundImage(post.querySelector('[class*="preview"]'));
+        if (cover) item.image = cover;
+      }
+    }
+
+    if (!item && parsePostPath(location.pathname)) item = currentPostEntry();
+    if (!item) return;
+
+    const entry = buildHistoryEntry({
+      origin: location.origin,
+      id: item.id,
+      path: item.path,
+      url: item.url,
+      title: item.title,
+      author: item.author,
+      authorUrl: item.authorUrl,
+      avatar: item.avatar,
+      image: item.image,
+      excerpt: item.excerpt,
+      date: item.date,
+      type: 'video',
+      viewedAt: Date.now()
+    });
+
+    state.history = upsertHistory(state.history, entry);
+    save();
+    updateBadge();
+    if (state.open && state.tab === 'history') renderList();
+  }
+
+  function onDocumentClick(e) {
+    if (!e.target || !e.target.closest) return;
+    const trigger = e.target.closest(VIDEO_TRIGGER_SEL);
+    if (trigger) recordVideoStart(trigger);
+  }
+
+  function onVideoPlay(e) {
+    if (e.target && e.target.tagName === 'VIDEO') recordVideoStart(e.target);
+  }
+
+  function watchVideoPlayers() {
+    document.querySelectorAll('vk-video-player').forEach((player) => {
+      if (watchedVideoPlayers.has(player)) return;
+      watchedVideoPlayers.add(player);
+      const stateEl = player.querySelector('.state-container');
+      if (!stateEl) return;
+      const check = () => {
+        if (stateEl.getAttribute('data-playback-state') === 'playing') recordVideoStart(player);
+      };
+      const observer = new MutationObserver(check);
+      observer.observe(stateEl, { attributes: true, attributeFilter: ['data-playback-state'] });
+      check();
+    });
+  }
+
   const itemCount = () => Object.keys(state.items).length;
 
   function sortedItems() {
@@ -375,20 +466,26 @@
     ].join(',');
 
     for (const scope of scopes) {
-      let link = null;
+      let links = [];
       try {
-        link = scope.querySelector(selectors);
+        links = [...scope.querySelectorAll(selectors)];
       } catch (err) {
-        link = null;
+        links = [];
       }
-      if (!link) continue;
+      if (!links.length) continue;
 
-      const img = link.querySelector('img');
-      return {
-        name: clean(link.textContent),
-        url: location.origin + '/' + slug,
-        avatar: img ? (img.currentSrc || img.getAttribute('src') || '') : ''
-      };
+      const nameEl = scope.querySelector('[class*="authorName"]');
+      let name = nameEl ? clean(nameEl.textContent) : '';
+      let avatar = '';
+      for (const link of links) {
+        const text = clean(link.textContent);
+        if (!name && text) name = text;
+        const img = link.querySelector('img');
+        if (!avatar && img) avatar = img.currentSrc || img.getAttribute('src') || '';
+      }
+      if (name || avatar) {
+        return { name: name || slug, url: location.origin + '/' + slug, avatar };
+      }
     }
 
     // на странице поста подпись автора может быть вне карточки поста
@@ -610,7 +707,7 @@
     btn.type = 'button';
     btn.className = 'tm-bo-top';
     btn.dataset.tmBo = kind;
-    btn.innerHTML = isHistory ? clockSVG(24) : starSVG(24);
+    btn.innerHTML = isHistory ? clockSVG(20) : starSVG(20);
     btn.title = isHistory ? 'История' : 'Избранное';
     btn.setAttribute('aria-label', isHistory ? 'Открыть историю' : 'Открыть избранное');
     btn.addEventListener('click', (e) => {
@@ -1122,29 +1219,32 @@
       .tm-bo-item__remove_text:hover { color: var(--var-color-text-primary, #f1f1f1); }
       .tm-bo-empty__clock { color: var(--var-color-text-secondary, #8c8c8c); opacity: .5; margin-bottom: 14px; }
 
-      /* кнопка в шапке */
+      /* кнопка в шапке — как нативные кнопки уведомлений и сообщений */
       .tm-bo-top {
         position: relative;
         display: inline-flex;
         align-items: center;
         justify-content: center;
+        box-sizing: border-box;
         width: 40px;
         height: 40px;
-        margin: 0 2px;
+        margin: 0;
         padding: 0;
-        border: 0;
-        border-radius: 12px;
-        background: var(--var-color-chip-bg, rgba(127,127,127,.14));
-        color: var(--var-color-text-primary, #f1f1f1);
+        border: 1px solid var(--var-color-input-border, transparent);
+        border-radius: var(--border-radius-default, 8px);
+        background-color: transparent;
+        color: var(--var-color-text-regular, var(--var-color-text-primary, #f1f1f1));
         cursor: pointer;
         flex: 0 0 auto;
-        transition: background .15s ease, color .15s ease;
+        transition: all .2s ease;
         -webkit-tap-highlight-color: transparent;
       }
-      // звезда в шапке — та же обводка, что у иконок уведомлений и сообщений
       .tm-bo-top .tm-bo-star-svg path { stroke-width: 1.8; }
-      .tm-bo-top:hover { background: var(--var-color-chip-bg-hover, rgba(127,127,127,.2)); color: var(--var-color-text-primary, #f1f1f1); }
-      .tm-bo-top.is-open { background: var(--var-color-chip-bg-hover, rgba(127,127,127,.2)); color: var(--var-color-text-primary, #f1f1f1); }
+      .tm-bo-top:hover { border-color: var(--var-color-input-border-hover); }
+      .tm-bo-top.is-open { background-color: #f6f6f6; }
+      .dark-theme .tm-bo-top { background-color: #303030; }
+      .dark-theme .tm-bo-top:hover { background-color: #4a4a4a; }
+      .dark-theme .tm-bo-top.is-open { background-color: #4a4a4a; }
 
       /* звезда в карточке поста */
       .tm-bo-star-btn {
@@ -1452,6 +1552,7 @@
   // ── Запуск и слежение за SPA ──────────────────────────────────────────────
   function scan() {
     onUrlChange();
+    watchVideoPlayers();
     injectStyles();
     ensureTopButtons();
     mountPostStars();
@@ -1479,6 +1580,9 @@
 
     scan();
     buildPanel();
+
+    document.addEventListener('click', onDocumentClick, true);
+    document.addEventListener('play', onVideoPlay, true);
 
     const observer = new MutationObserver((mutations) => {
       for (const mutation of mutations) {
