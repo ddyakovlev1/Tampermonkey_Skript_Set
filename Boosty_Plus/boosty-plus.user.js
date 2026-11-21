@@ -1483,6 +1483,7 @@
     const stored = readStore(localStorage);
     state.items = stored.items;
     state.history = stored.history;
+    if (!localStorage.getItem(STORE_KEY)) save();
 
     scan();
     buildPanel();
