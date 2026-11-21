@@ -480,7 +480,7 @@
     state.items[item.id] = item;
     save();
     syncUI();
-    toast('Добавлено в избранное', 'Открыть', () => openPanel());
+    toast('Добавлено в избранное', 'Открыть', () => openPanel('favorites'));
     return true;
   }
 
@@ -695,7 +695,7 @@
     histTab.append(histCountEl);
     histTab.addEventListener('click', () => switchTab('history'));
 
-    tabsEl.append(favTab, histTab);
+    tabsEl.append(histTab, favTab);
 
     const close = el('button', 'tm-bo-icon-btn', '✕');
     close.type = 'button';
@@ -1039,8 +1039,7 @@
       }
       .tm-bo-star-btn.is-active .tm-bo-star-svg path,
       .tm-bo-item__remove .tm-bo-star-svg path,
-      .tm-bo-empty__star .tm-bo-star-svg path,
-      .tm-bo-panel__title-star .tm-bo-star-svg path {
+      .tm-bo-empty__star .tm-bo-star-svg path {
         fill: currentColor;
       }
 
@@ -1091,6 +1090,8 @@
         color: var(--var-color-text-secondary, #8c8c8c);
         font-size: 12px;
       }
+      .tm-bo-panel__search[hidden],
+      .tm-bo-panel__tools[hidden] { display: none; }
       .tm-bo-panel__clear {
         border: 0;
         padding: 4px 8px;
@@ -1222,15 +1223,6 @@
         border-bottom: 1px solid var(--var-color-base-border, #3c3c3c);
         flex: 0 0 auto;
       }
-      .tm-bo-panel__title {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        font-size: 18px;
-        font-weight: 700;
-        letter-spacing: -.01em;
-      }
-      .tm-bo-panel__title-star { display: inline-flex; color: var(--color-brand, #f15f2c); }
       .tm-bo-panel__count {
         display: inline-flex;
         align-items: center;
